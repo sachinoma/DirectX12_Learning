@@ -1,4 +1,8 @@
-float4 BasicPS(float4 pos : SV_POSITION) : SV_TARGET
+#include"BasicShaderHeader.hlsli"
+Texture2D<float4> tex : register(t0); //テクスチャ
+SamplerState smp : register(s0); //サンプラー
+
+float4 BasicPS(Output input) : SV_TARGET
 {
-	return float4((float2(0,1) + pos.xy) * 0.5f,1,1);
+	return float4(tex.Sample(smp,input.uv));
 }
