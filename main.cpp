@@ -57,6 +57,15 @@ ID3D12GraphicsCommandList* cmdList_ = nullptr;
 ID3D12CommandQueue* cmdQueue_ = nullptr;
 IDXGISwapChain4* swapchain_ = nullptr;
 
+///アライメントに揃えたサイズを返す
+///@param size 元のサイズ
+///@param alignment アライメントサイズ
+///@return アライメントをそろえたサイズ
+size_t
+AlignmentedSize(size_t size, size_t alignment) {
+	return size + alignment - size % alignment;
+}
+
 void EnableDebugLayer() {
 	ID3D12Debug* debugLayer = nullptr;
 	auto result = D3D12GetDebugInterface(
@@ -512,64 +521,150 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	result = LoadFromWICFile(
 		L"img/textest.png", WIC_FLAGS_NONE,
 		&metadata, scratchImg);
-
 	auto img = scratchImg.GetImage(0, 0, 0);//最初のミップマップの最初のイメージを取得
 
-	//struct TexRGBA
-	//{
-	//	unsigned char R, G, B, A;
-	//};
+	//まずは中間バッファとしてのUploadヒープ設定
+	D3D12_HEAP_PROPERTIES uploadHeapProp = {};
+	//マップ可能にするため、UPLOADにする
+	uploadHeapProp.Type = D3D12_HEAP_TYPE_UPLOAD;
+	//アップロード用に使用すること前提なのでUNKNOWNでよい
+	uploadHeapProp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+	uploadHeapProp.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+	uploadHeapProp.CreationNodeMask = 0;//単一アダプタのため0
+	uploadHeapProp.VisibleNodeMask = 0;//単一アダプタのため0
 
-	//std::vector<TexRGBA> texturedata(256 * 256);
-	//for (auto& rgba : texturedata)
-	//{
-	//	rgba.R = rand() % 256;
-	//	rgba.G = rand() % 256;
-	//	rgba.B = rand() % 256;
-	//	rgba.A = 255; //アルファは1.0
-	//}
+	D3D12_RESOURCE_DESC resDesc = {};
+	resDesc.Format = DXGI_FORMAT_UNKNOWN; //単なるデータの塊なのでUNKNOWN
+	resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; //単なるバッファーとして指定
 
-	//WriteToSubresourceで転送する用のヒープ設定
+	resDesc.Width = AlignmentedSize(img->rowPitch, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) * img->height;//データサイズ
+	resDesc.Height = 1;
+	resDesc.DepthOrArraySize = 1;
+	resDesc.MipLevels = 1;
+
+	resDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; //連続したデータ
+	resDesc.Flags = D3D12_RESOURCE_FLAG_NONE; //特にフラグなし
+
+	resDesc.SampleDesc.Count = 1; //通常テクスチャなのでアンチェイリアシングしない
+	resDesc.SampleDesc.Quality = 0;
+
+	//中間バッファ作成
+	ID3D12Resource* uploadbuff = nullptr;
+	result = dev_->CreateCommittedResource(
+		&uploadHeapProp, 
+		D3D12_HEAP_FLAG_NONE, //特に指定なし
+		&resDesc, //上で設定したリソース設定
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&uploadbuff)
+	);
+
+	//次にテクスチャのためのヒープ設定
 	D3D12_HEAP_PROPERTIES texHeapProp = {};
-	texHeapProp.Type = D3D12_HEAP_TYPE_CUSTOM;//特殊な設定なのでdefaultでもuploadでもなく
-	texHeapProp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;//ライトバックで
-	texHeapProp.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;//転送がL0つまりCPU側から直で
+	texHeapProp.Type = D3D12_HEAP_TYPE_DEFAULT;//テクスチャ用
+	texHeapProp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+	texHeapProp.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
 	texHeapProp.CreationNodeMask = 0;//単一アダプタのため0
 	texHeapProp.VisibleNodeMask = 0;//単一アダプタのため0
 
-	D3D12_RESOURCE_DESC resDesc = {};
+	//リソース設定(変数は使いまわし)
 	resDesc.Format = metadata.format;//RGBAフォーマット
 	resDesc.Width = metadata.width;//幅
 	resDesc.Height = metadata.height;//高さ
 	resDesc.DepthOrArraySize = metadata.arraySize;//2Dで配列でもないので１
-	resDesc.SampleDesc.Count = 1;//通常テクスチャなのでアンチェリしない
-	resDesc.SampleDesc.Quality = 0;//
 	resDesc.MipLevels = metadata.mipLevels;//ミップマップしないのでミップ数は１つ
 	resDesc.Dimension = static_cast<D3D12_RESOURCE_DIMENSION>(metadata.dimension);//2Dテクスチャ用
 	resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;//レイアウトについては決定しない
-	resDesc.Flags = D3D12_RESOURCE_FLAG_NONE;//とくにフラグなし
 
+	//テクスチャバッファ作成
 	ID3D12Resource* texbuff = nullptr;
 	result = dev_->CreateCommittedResource(
 		&texHeapProp,
 		D3D12_HEAP_FLAG_NONE,//特に指定なし
 		&resDesc,
-		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,//テクスチャ用(ピクセルシェーダから見る用)
+		D3D12_RESOURCE_STATE_COPY_DEST,//コピー先
 		nullptr,
 		IID_PPV_ARGS(&texbuff)
 	);
 
-	result = texbuff->WriteToSubresource(
-		0,
-		nullptr, //全領域にコピー
-		img->pixels, //元データアドレス
-		img->rowPitch, //1行のバイト数
-		img->slicePitch //１枚サイズ
-	);
+	uint8_t* mapforImg = nullptr; //image->pixelsと同じ型にする
+	result = uploadbuff->Map(0, nullptr, (void**)&mapforImg); //マップ
+
+	auto srcAddress = img->pixels;
+	auto rowPitch = AlignmentedSize(img->rowPitch, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+	for (int y = 0; y < img->height; ++y) {
+		std::copy_n(srcAddress,
+			rowPitch,
+			mapforImg);//コピー
+		//1行ごとの辻褄を合わせてやる
+		srcAddress += img->rowPitch;
+		mapforImg += rowPitch;
+	}
+	uploadbuff->Unmap(0, nullptr); //アンマップ
+
+
+	D3D12_TEXTURE_COPY_LOCATION src = {};
+	D3D12_TEXTURE_COPY_LOCATION dst = {};
+	//コピー先（テクスチャ側）設定
+	dst.pResource = texbuff; //テクスチャバッファー
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	dst.SubresourceIndex = 0;
+
+	//コピー元（アップロード側）設定
+	src.pResource = uploadbuff; //中間バッファー
+	src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; //フットプリント指定
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+	UINT nrow;
+	UINT64 rowsize, size;
+	auto desc = texbuff->GetDesc();
+	dev_->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &nrow, &rowsize, &size);
+	src.PlacedFootprint = footprint;
+
+	src.PlacedFootprint.Offset = 0;
+	src.PlacedFootprint.Footprint.Width = metadata.width;
+	src.PlacedFootprint.Footprint.Height = metadata.height;
+	src.PlacedFootprint.Footprint.Depth = metadata.depth;
+	src.PlacedFootprint.Footprint.RowPitch = AlignmentedSize(img->rowPitch, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+	src.PlacedFootprint.Footprint.Format = img->format;
+
+		
+
+	{
+		//_cmdAllocator->Reset();//キューをクリア
+		//_cmdList->Reset(_cmdAllocator, nullptr);
+
+		cmdList_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+		D3D12_RESOURCE_BARRIER BarrierDesc = {};
+		BarrierDesc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		BarrierDesc.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		BarrierDesc.Transition.pResource = texbuff;
+		BarrierDesc.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		BarrierDesc.Transition.StateBefore = 
+			D3D12_RESOURCE_STATE_COPY_DEST; //ここが重要
+		BarrierDesc.Transition.StateAfter =
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE; //ここも重要
+
+		cmdList_->ResourceBarrier(1, &BarrierDesc);
+		cmdList_->Close();
+		//コマンドリストの実行
+		ID3D12CommandList* cmdlists[] = { cmdList_ };
+		cmdQueue_->ExecuteCommandLists(1, cmdlists);
+
+		////待ち
+		cmdQueue_->Signal(_fence, ++_fenceVal);
+		if (_fence->GetCompletedValue() != _fenceVal) {
+			auto event = CreateEvent(nullptr, false, false, nullptr);
+			_fence->SetEventOnCompletion(_fenceVal, event);
+			WaitForSingleObject(event, INFINITE);
+			CloseHandle(event);
+		}
+		cmdAllocator_->Reset();//キューをクリア
+		cmdList_->Reset(cmdAllocator_, nullptr);
+	}
 
 	ID3D12DescriptorHeap* texDescHeap = nullptr;
 	D3D12_DESCRIPTOR_HEAP_DESC descHeapDesc = {};
-
 	//シェーダーから見えるように
 	descHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	//マスクは0
@@ -677,7 +772,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 		}
 
 		cmdAllocator_->Reset();//キューをクリア
-		cmdList_->Reset(cmdAllocator_, nullptr);//再びコマンドリストをためる準備
+		cmdList_->Reset(cmdAllocator_, _pipelinestate);//再びコマンドリストをためる準備
 
 
 		//フリップ
