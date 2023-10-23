@@ -265,6 +265,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	std::vector<unsigned char> vertices(vertNum * pmdvertex_size); //バッファー確保
 	fread(vertices.data(), vertices.size(), 1, fp); //読み込み
 		
+	std::vector<unsigned short> indices;
 	unsigned int indicesNum;//インデックス数
 	fread(&indicesNum, sizeof(indicesNum), 1, fp);
 
@@ -272,7 +273,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	//	XMFLOAT3 pos;//XYZ座標
 	//	XMFLOAT2 uv;//UV座標
 	//};
-
 	//Vertex vertices[] =	//4頂点
 	//{
 	//	{{-1.0f ,-1.0f ,0.0f},	{0.0f,1.0f} },//左下
@@ -280,7 +280,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	//	{{ 1.0f ,-1.0f ,0.0f},	{1.0f,1.0f}	},//右下
 	//	{{ 1.0f , 1.0f ,0.0f},	{1.0f,0.0f}	},//右上
 	//};
-
 	/*D3D12_HEAP_PROPERTIES heapProp = {};
 	heapProp.Type = D3D12_HEAP_TYPE_UPLOAD;
 	heapProp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
@@ -296,7 +295,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	resdesc.SampleDesc.Count = 1;
 	resdesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 	resdesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;*/
-
 	////UPLOAD(確保は可能)
 	//ID3D12Resource* vertBuff = nullptr;
 	//result = _dev->CreateCommittedResource(
@@ -331,8 +329,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	vbView.SizeInBytes = vertices.size();//全バイト数
 	vbView.StrideInBytes = pmdvertex_size;//1頂点あたりのバイト数 38
 
-	std::vector<unsigned short> indices(indicesNum);
-
+	indices.resize(indicesNum);
 	fread(indices.data(), indices.size() * sizeof(indices[0]), 1, fp);
 
 	fclose(fp);
@@ -654,7 +651,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	matrix.r[3].m128_f32[0] = -1.0f;
 	matrix.r[3].m128_f32[1] = 1.0f;*/
 
-	XMMATRIX worldMat = XMMatrixRotationY(XM_PIDIV4);
+	//定数バッファ作成
+	/*XMMATRIX worldMat = XMMatrixRotationY(XM_PIDIV4);*/
+	XMMATRIX worldMat = XMMatrixIdentity();
 	XMFLOAT3 eye(0, 10, -15);
 	XMFLOAT3 target(0, 10, 0);
 	XMFLOAT3 up(0, 1, 0);
@@ -780,7 +779,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 		cmdList_->RSSetViewports(1, &viewport);
 		cmdList_->RSSetScissorRects(1, &scissorrect);
 
-		cmdList_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+		cmdList_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		cmdList_->IASetVertexBuffers(0, 1, &vbView);
 		cmdList_->IASetIndexBuffer(&ibView);
 
@@ -794,7 +793,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 		//heapHandle.ptr += _dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		//cmdList_->SetGraphicsRootDescriptorTable(1, heapHandle);
 
-		cmdList_->DrawIndexedInstanced(vertNum, 1, 0, 0, 0);
+		cmdList_->DrawIndexedInstanced(indicesNum, 1, 0, 0, 0);
 
 		//命令のクローズ
 		cmdList_->Close();
